@@ -34,3 +34,15 @@ __pycache__/
 # Ignore package lock files
 package-lock.json
 yarn.lock
+
+# add video and image extensions
+*.mp4
+*.webm
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+*.webp
+*.json
