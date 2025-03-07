@@ -41,6 +41,7 @@ dependencies:
   path_provider: ^2.1.1    # For file paths
   provider: ^6.0.5         # For state management
   shared_preferences: ^2.2.1  # For local storage
+  tflite_flutter: ^0.11.0
 
 dev_dependencies:
   flutter_test:
@@ -66,6 +67,7 @@ flutter:
 
   assets:
     - assets/images/
+    - assets/working_model_1.tflite
 
   # To add assets to your application, add an assets section, like this:
   # assets:

@@ -7,6 +7,9 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import 'dart:math' show pi;
 import 'package:path_provider/path_provider.dart';
+import 'package:tflite_flutter/tflite_flutter.dart';
+import 'package:app/models/exercise_model.dart';
+
 
 class ExerciseScreen extends StatefulWidget {
   final String exerciseName;
@@ -21,6 +24,12 @@ class ExerciseScreen extends StatefulWidget {
 }
 
 class _ExerciseScreenState extends State<ExerciseScreen> with WidgetsBindingObserver {
+  // The Interpreter is the object that loads and runs the TensorFlow Lite model.
+  // In this case, it is used to detect the pose of the user in the camera stream.
+  // The model is loaded from the assets folder and is specific to the exercise
+  // being performed. The model takes a camera image as input and outputs a list
+  // of poses, which are then used to track the user's movement and provide feedback.
+  Interpreter? _interpreter;
   bool _isCameraInitialized = false;
   CameraController? _cameraController;
   PoseDetector? _poseDetector;
@@ -55,10 +64,11 @@ class _ExerciseScreenState extends State<ExerciseScreen> with WidgetsBindingObse
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-
+    _loadModel();
     _initPoseDetector();
     _initializeCamera();
     _initTts();
+
 
     // Start countdown
     Future.delayed(const Duration(seconds: 1), () {
@@ -87,6 +97,16 @@ class _ExerciseScreenState extends State<ExerciseScreen> with WidgetsBindingObse
         });
       }
     });
+  }
+
+  Future<void> _loadModel() async {
+    try {
+      // The file "working_model_1.tflite" must be declared in pubspec.yaml under assets
+      _interpreter = await Interpreter.fromAsset("assets/working_model_1.tflite");
+      print("TFLite model loaded successfully!");
+    } catch (e) {
+      print("Error loading TFLite model: $e");
+    }
   }
 
   void _initPoseDetector() {
@@ -123,13 +143,13 @@ class _ExerciseScreenState extends State<ExerciseScreen> with WidgetsBindingObse
 
       // Try to find front camera
       final frontCamera = cameras.firstWhere(
-            (camera) => camera.lensDirection == CameraLensDirection.front,
+            (camera) => camera.lensDirection == CameraLensDirection.back,
         orElse: () => cameras.first,
       );
 
       _cameraController = CameraController(
         frontCamera,
-        ResolutionPreset.medium, // Using medium for better quality while maintaining performance
+        ResolutionPreset.low, // Using medium for better quality while maintaining performance
         enableAudio: false,
         imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.yuv420 : ImageFormatGroup.bgra8888,
       );
@@ -198,19 +218,83 @@ class _ExerciseScreenState extends State<ExerciseScreen> with WidgetsBindingObse
       }
     });
   }
-  void _processExerciseLogic(Pose pose) {
-    // Simple implementation to display pose detection is working
-    // You can replace this with your actual exercise detection logic later
+  Future<void> _processExerciseLogic(Pose pose) async {
+    // 1. Extract parameters using getParams() for squats.
+    List<double> params = getParams(pose, exercise: 'squats');
+    print("Extracted parameters: $params");
 
-    // Count visible landmarks
-    int visibleLandmarks = 0;
-    pose.landmarks.forEach((_, landmark) {
-      visibleLandmarks++;
-    });
+    if (_interpreter != null) {
+      // 2. Prepare input and output buffers.
+      var input = [params]; // shape: [1, N]
+      var output = List.filled(5, 0.0).reshape([1, 5]); // model outputs 5 values
 
-    if (mounted) {
+      try {
+        // 3. Run inference.
+        _interpreter!.run(input, output);
+        print("Raw model output: $output");
+
+        // 4. Process the output as in the Python code.
+        List<String> outputNames = ['c', 'k', 'h', 'r', 'x', 'i'];
+        List<double> out = List.from(output[0]);
+
+        out[0] *= 0.7;
+        out[1] *= 1.7;
+        out[2] *= 4;
+        out[3] *= 0;
+        out[4] *= 5;
+
+        double sumOut = out.reduce((a, b) => a + b);
+        for (int i = 0; i < out.length; i++) {
+          out[i] = out[i] * (1 / sumOut);
+        }
+
+        // Adjust the third output value.
+        out[2] += 0.1;
+
+        // 5. Build the label string from indices 1 to 3.
+        String label = "";
+        for (int i = 1; i < 4; i++) {
+          if (out[i] > 0.5) {
+            label += outputNames[i];
+          }
+        }
+        if (label.isEmpty) {
+          label = "c";
+        }
+        // Append 'x' if output[4] > 0.15 and the label is 'c'.
+        if (out[4] > 0.15 && label == "c") {
+          label += "x";
+        }
+        // Skip "cx" since it has no label – set it back to "c".
+        if (label == "cx") {
+          label = "c";
+        }
+
+        // 6. Get the full feedback using labelFinalResults().
+        String fullFeedback = labelFinalResults(label);
+        print("Final label: $label, Feedback: $fullFeedback");
+
+        // 7. Provide vocal feedback.
+        await _speak(fullFeedback);
+
+        // 8. Update the UI with the final feedback.
+        setState(() {
+          _currentFeedback = fullFeedback;
+        });
+      } catch (e) {
+        print("Error running inference: $e");
+        setState(() {
+          _currentFeedback = "Inference error.";
+        });
+      }
+    } else {
+      // If interpreter is null, simply log the landmark count.
+      int visibleLandmarks = 0;
+      pose.landmarks.forEach((_, landmark) {
+        visibleLandmarks++;
+      });
+      print("Detected $visibleLandmarks landmarks");
       setState(() {
-        // Update the feedback to show pose detection is working
         _currentFeedback = "Detected $visibleLandmarks landmarks";
       });
     }
